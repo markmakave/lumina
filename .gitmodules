@@ -2,3 +2,6 @@
 	path = firmware/lib/esp32-camera
 	url = https://github.com/espressif/esp32-camera.git
 	branch = master
+[submodule "firmware/lib/mavlink"]
+	path = firmware/lib/mavlink
+	url = https://github.com/mavlink/mavlink.git

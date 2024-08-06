@@ -1,24 +1,29 @@
-#include <iostream>
 
 #include <esp_log.h>
-#include <esp_camera.h>
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
+#include "vec.hpp"
 
 #define TAG "lumina"
+
+void task(void*)
+{
+    return;
+}
 
 extern "C"
 int app_main()
 {
-
-    while (true)
-    {
-        ESP_LOGI(TAG, "Starting camera");
-
-        vTaskDelay(1000 / portTICK_PERIOD_MS);
-    }
+    xTaskCreate(
+        task,
+        "main",
+        4096,
+        NULL,
+        5,
+        NULL
+    );
 
     return 0;
 }
