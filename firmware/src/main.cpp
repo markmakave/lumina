@@ -1,29 +1,74 @@
 
-#include <esp_log.h>
+#include <iostream>
 
-#include <freertos/FreeRTOS.h>
-#include <freertos/task.h>
+#include "lumina.hpp"
 
-#include "vec.hpp"
+#include "mavlink/common/mavlink.h"
+#include <sys/socket.h>
+#include <arpa/inet.h>
+#include <unistd.h>
 
-#define TAG "lumina"
-
-void task(void*)
-{
-    return;
-}
+#include <thread>
+#include <chrono>
 
 extern "C"
-int app_main()
+void app_main(void)
 {
-    xTaskCreate(
-        task,
-        "main",
-        4096,
-        NULL,
-        5,
-        NULL
-    );
+    std::this_thread::sleep_for(std::chrono::seconds(1));
 
-    return 0;
+    lumina::wlan wlan;
+
+    wlan.connect("Matepad", "13211321");
+
+    while (wlan.status() == wlan.status::DISCONNECTED)
+        vTaskDelay(1000 / portTICK_PERIOD_MS);
+
+    auto ip = wlan.ip();
+    auto mask = wlan.mask();
+    auto broadcast_ip = (ip & mask) | ~mask;
+
+    std::cout << "IP: " << ip << std::endl;
+    std::cout << "Mask: " << mask << std::endl;
+    std::cout << "Broadcast IP: " << broadcast_ip << std::endl;
+
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+
+    int sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (sockfd < 0) {
+        std::cerr << "Error creating socket!" << std::endl;
+    }
+
+    sockaddr_in serverAddr = {};
+    serverAddr.sin_family = AF_INET;
+    serverAddr.sin_port = htons(14550);
+    serverAddr.sin_addr.s_addr = broadcast_ip.u32;
+        
+    while (true)
+    {
+        // construct and send mavlink heartbeat message over udp to 192.168.43.0
+
+        mavlink_message_t msg;
+        uint8_t buffer[MAVLINK_MAX_PACKET_LEN];
+        mavlink_heartbeat_t heartbeat;
+
+        heartbeat.type = MAV_TYPE_QUADROTOR;           // Set UAV type (e.g., quadrotor)
+        heartbeat.autopilot = MAV_AUTOPILOT_GENERIC;  // Set autopilot type
+        heartbeat.base_mode = MAV_MODE_MANUAL_ARMED;   // Set mode (manual, armed, etc.)
+        heartbeat.custom_mode = 0;                     // Custom mode (typically set to 0)
+        heartbeat.system_status = MAV_STATE_ACTIVE;    // System status
+        heartbeat.mavlink_version = MAVLINK_VERSION;   // MAVLink version
+
+        mavlink_msg_heartbeat_encode(1, 1, &msg, &heartbeat);
+
+        uint16_t messageLength = mavlink_msg_to_send_buffer(buffer, &msg);
+
+        ssize_t sentBytes = sendto(sockfd, buffer, messageLength, 0, (struct sockaddr*)&serverAddr, sizeof(serverAddr));
+        if (sentBytes != messageLength) {
+            std::cerr << "Error sending heartbeat!" << std::endl;
+        } else {
+            std::cout << "Heartbeat sent!" << std::endl;
+        }
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
 }

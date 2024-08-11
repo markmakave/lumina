@@ -2,7 +2,6 @@
 
 #include "driver/gpio.h"
 
-
 namespace lumina
 {
 
