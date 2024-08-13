@@ -16,27 +16,18 @@ void app_main(void)
 {
     std::this_thread::sleep_for(std::chrono::seconds(1));
 
-    lumina::wlan wlan;
-
-    wlan.connect("Matepad", "13211321");
-
-    while (wlan.status() == wlan.status::DISCONNECTED)
-        vTaskDelay(1000 / portTICK_PERIOD_MS);
+    lumina::wlan<lumina::AP> wlan("MAV", "12345678");
+    wlan.enable();
 
     auto ip = wlan.ip();
     auto mask = wlan.mask();
     auto broadcast_ip = (ip & mask) | ~mask;
 
-    std::cout << "IP: " << ip << std::endl;
-    std::cout << "Mask: " << mask << std::endl;
-    std::cout << "Broadcast IP: " << broadcast_ip << std::endl;
-
     std::this_thread::sleep_for(std::chrono::seconds(2));
 
     int sockfd = socket(AF_INET, SOCK_DGRAM, 0);
-    if (sockfd < 0) {
+    if (sockfd < 0)
         std::cerr << "Error creating socket!" << std::endl;
-    }
 
     sockaddr_in serverAddr = {};
     serverAddr.sin_family = AF_INET;
@@ -45,8 +36,6 @@ void app_main(void)
         
     while (true)
     {
-        // construct and send mavlink heartbeat message over udp to 192.168.43.0
-
         mavlink_message_t msg;
         uint8_t buffer[MAVLINK_MAX_PACKET_LEN];
         mavlink_heartbeat_t heartbeat;
@@ -69,6 +58,6 @@ void app_main(void)
             std::cout << "Heartbeat sent!" << std::endl;
         }
 
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        std::this_thread::sleep_for(std::chrono::seconds(1));
     }
 }
