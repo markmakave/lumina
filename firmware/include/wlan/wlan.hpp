@@ -2,6 +2,7 @@
 
 #include <string_view>
 #include <array>
+#include <format>
 
 #include <cstring>
 
@@ -15,81 +16,26 @@
 #include <freertos/event_groups.h>
 #include <freertos/task.h>
 
+#include "ip.hpp"
+#include "mac.hpp"
+
 #define ESP_CHECK(x) if(auto err = x; err != ESP_OK) { ESP_LOGE("WLAN", "Error on " #x": %s", esp_err_to_name(err)); }
 
 namespace lumina
 {
-
-class ipv4
-{
-public:
-
-    union
-    {
-        uint32_t u32;
-        std::array<uint8_t, 4> u8;
-    };
-
-public:
-
-    ipv4()
-    :   u32{}
-    {}
-
-    ipv4(std::string_view ip)
-    {
-        std::sscanf(ip.data(), "%hhu.%hhu.%hhu.%hhu", &u8[0], &u8[1], &u8[2], &u8[3]);
-    }
-
-    ipv4(uint8_t a, uint8_t b, uint8_t c, uint8_t d)
-    :   u8{ a, b, c, d }
-    {}
-
-    ipv4(uint32_t ip)
-    :   u32(ip)
-    {}
-
-    ipv4 operator& (ipv4 mask)
-    {
-        return { u32 & mask.u32 };
-    }
-
-    ipv4 operator| (ipv4 mask)
-    {
-        return { u32 | mask.u32 };
-    }
-
-    ipv4 operator^ (ipv4 mask)
-    {
-        return { u32 ^ mask.u32 };
-    }
-
-    ipv4 operator~ ()
-    {
-        return { ~u32 };
-    }
-
-    friend std::ostream& operator<< (std::ostream& os, ipv4 ip)
-    {
-        return os << static_cast<int>(ip.u8[0]) << "." << static_cast<int>(ip.u8[1]) << "." << static_cast<int>(ip.u8[2]) << "." << static_cast<int>(ip.u8[3]);
-    }
-
-    std::string to_string() const
-    {
-        return std::to_string(u8[0]) + "." + std::to_string(u8[1]) + "." + std::to_string(u8[2]) + "." + std::to_string(u8[3]);
-    }
-
-};
-
 enum mode { STA, AP };
 
 template <mode>
 class wlan;
 
-
 template <>
 class wlan<STA>
 {
+
+    static constexpr auto      STARTED_BIT = BIT0;
+    static constexpr auto    CONNECTED_BIT = BIT1;
+    static constexpr auto DISCONNECTED_BIT = BIT2;
+
 public:
 
     enum status { DISCONNECTED, CONNECTING, CONNECTED };
@@ -97,7 +43,7 @@ public:
 public:
 
     wlan()
-    :    _status(DISCONNECTED)
+    :   _event_group(xEventGroupCreate())
     {
         ESP_CHECK(nvs_flash_init());
         ESP_CHECK(esp_netif_init());
@@ -111,6 +57,11 @@ public:
         ESP_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &wlan::_event_handler, this));
         ESP_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &wlan::_event_handler, this));
 
+        ESP_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+
+        ESP_CHECK(esp_wifi_start());
+        xEventGroupWaitBits(_event_group, STARTED_BIT, pdFALSE, pdTRUE, portMAX_DELAY);
+        
         ESP_LOGI("WLAN", "initialized as STA");
     }
 
@@ -125,35 +76,24 @@ public:
 
     void connect(std::string_view ssid, std::string_view password)
     {
-        if (_mode == AP)
-        {
-            ESP_LOGE("WLAN", "Cannot connect to AP in AP mode");
-            return;
-        }
-
         wifi_config_t wifi_config = {};
         std::strncpy(reinterpret_cast<char*>(wifi_config.sta.ssid), ssid.data(), sizeof(wifi_config.sta.ssid));
         std::strncpy(reinterpret_cast<char*>(wifi_config.sta.password), password.data(), sizeof(wifi_config.sta.password));
         wifi_config.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
         wifi_config.sta.pmf_cfg.capable = true;
         wifi_config.sta.pmf_cfg.required = false;
-
-        ESP_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
         ESP_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
-        ESP_CHECK(esp_wifi_start());
+
+        ESP_CHECK(esp_wifi_connect());
+        xEventGroupWaitBits(_event_group, CONNECTED_BIT, pdFALSE, pdTRUE, portMAX_DELAY);
 
         ESP_LOGI("WLAN", "connecting to %s", ssid.data());
     }
 
     void disconnect()
     {
-        if (_mode == AP)
-        {
-            ESP_LOGE("WLAN", "Cannot disconnect from AP in AP mode");
-            return;
-        }
-
         ESP_CHECK(esp_wifi_disconnect());
+        xEventGroupWaitBits(_event_group, DISCONNECTED_BIT, pdFALSE, pdTRUE, portMAX_DELAY);
 
         ESP_LOGI("WLAN", "disconneting wifi");
     }
@@ -178,38 +118,18 @@ protected:
             switch (event_id)
             {
                 case WIFI_EVENT_STA_START:
-                    ESP_CHECK(esp_wifi_connect());
                     break;
 
-                case WIFI_EVENT_STA_CONNECTED:
-                    ESP_LOGI("WLAN", "wifi connected");
-                    wlan._status = CONNECTED;
+                case WIFI_EVENT_STA_CONNECTED:  
+                    xEventGroupClearBits(wlan._event_group, wlan.DISCONNECTED_BIT);
+                    xEventGroupSetBits(wlan._event_group, wlan.CONNECTED_BIT);
                     break;
 
                 case WIFI_EVENT_STA_DISCONNECTED:
-                    {
-                        wifi_event_sta_disconnected_t* event = (wifi_event_sta_disconnected_t*) event_data;
-
-                        auto get_reason = [](wifi_event_sta_disconnected_t* event) -> std::string {
-                            switch (event->reason) {
-                                case WIFI_REASON_AUTH_EXPIRE:
-                                    return "Authentication expired";
-                                case WIFI_REASON_NO_AP_FOUND:
-                                    return "No AP found";
-                                case WIFI_REASON_AUTH_FAIL:
-                                    return "Authentication failed";
-                                // Handle other reason codes as necessary
-                                default:
-                                    return "Other";
-                            }
-                        };
-
-                        ESP_LOGI("WLAN", "wifi disconnected due to: %s", get_reason(event).c_str());
-
-                        wlan._status = DISCONNECTED;
-                        wlan._ip = {};
-                        wlan._mask = {};
-                    }
+                    wlan._ip = {};
+                    wlan._mask = {};
+                    xEventGroupClearBits(wlan._event_group, wlan.CONNECTED_BIT);
+                    xEventGroupSetBits(wlan._event_group, wlan.DISCONNECTED_BIT);
                     break;
                 
                 default:
@@ -233,9 +153,9 @@ protected:
 
 protected:
 
-    mode _mode;
-    enum status  _status;
     ipv4 _ip, _mask;
+
+    EventGroupHandle_t _event_group;
 };
 
 
@@ -303,7 +223,7 @@ public:
 
         ESP_LOGI("WLAN", "ap disabled");
     }
-    
+
     ipv4 ip() const
     {
         return _ip;
@@ -333,8 +253,8 @@ protected:
                     wlan._ip = ipv4(ip_info.ip.addr);
                     wlan._mask = ipv4(ip_info.netmask.addr);
 
-                    ESP_LOGI("WLAN", "ap ip: %s", wlan._ip.to_string().c_str());
-                    ESP_LOGI("WLAN", "ap mask: %s", wlan._mask.to_string().c_str());
+                    ESP_LOGI("WLAN", "ap ip: %s", static_cast<std::string>(wlan._ip).c_str());
+                    ESP_LOGI("WLAN", "ap mask: %s", static_cast<std::string>(wlan._mask).c_str());
 
                     xEventGroupClearBits(wlan._event_group, DISABLED_BIT);
                     xEventGroupSetBits(wlan._event_group, ENABLED_BIT);

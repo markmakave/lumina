@@ -1,9 +1,7 @@
 #pragma once
 
 #include "mavlink.hpp"
-#include "wlan.hpp"
-#include "esc.hpp"
-#include "vec.hpp"
+#include "wlan/wlan.hpp"
 
 namespace lumina
 {

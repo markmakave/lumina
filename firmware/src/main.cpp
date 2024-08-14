@@ -32,7 +32,7 @@ void app_main(void)
     sockaddr_in serverAddr = {};
     serverAddr.sin_family = AF_INET;
     serverAddr.sin_port = htons(14550);
-    serverAddr.sin_addr.s_addr = broadcast_ip.u32;
+    serverAddr.sin_addr.s_addr = broadcast_ip;
         
     while (true)
     {
